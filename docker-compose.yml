@@ -1,0 +1,246 @@
+services:
+  # ============================================================
+  # DATABASES - Database per Service Pattern
+  # ============================================================
+  postgres-user:
+    image: postgres:15-alpine
+    container_name: postgres-user
+    environment:
+      POSTGRES_DB: userdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+    volumes:
+      - postgres-user-data:/var/lib/postgresql/data
+    networks:
+      - logistics-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-order:
+    image: postgres:15-alpine
+    container_name: postgres-order
+    environment:
+      POSTGRES_DB: orderdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+    volumes:
+      - postgres-order-data:/var/lib/postgresql/data
+    networks:
+      - logistics-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-tracking:
+    image: postgres:15-alpine
+    container_name: postgres-tracking
+    environment:
+      POSTGRES_DB: trackingdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+    volumes:
+      - postgres-tracking-data:/var/lib/postgresql/data
+    networks:
+      - logistics-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-notification:
+    image: postgres:15-alpine
+    container_name: postgres-notification
+    environment:
+      POSTGRES_DB: notificationdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+    volumes:
+      - postgres-notification-data:/var/lib/postgresql/data
+    networks:
+      - logistics-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # MESSAGE BROKER
+  # ============================================================
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - logistics-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ============================================================
+  # MICROSERVICES
+  # ============================================================
+  user-service:
+    build:
+      context: ./services/user-service
+      dockerfile: Dockerfile
+    container_name: user-service
+    environment:
+      DB_HOST: postgres-user
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres123
+      DB_NAME: userdb
+      JWT_SECRET: logistics-super-secret-jwt-key-2024
+      PORT: 8001
+    depends_on:
+      postgres-user:
+        condition: service_healthy
+    networks:
+      - logistics-network
+    restart: unless-stopped
+
+  order-service:
+    build:
+      context: ./services/order-service
+      dockerfile: Dockerfile
+    container_name: order-service
+    environment:
+      DB_HOST: postgres-order
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres123
+      DB_NAME: orderdb
+      JWT_SECRET: logistics-super-secret-jwt-key-2024
+      RABBITMQ_URL: amqp://admin:admin123@rabbitmq:5672/
+      PORT: 8002
+    depends_on:
+      postgres-order:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - logistics-network
+    restart: unless-stopped
+
+  tracking-service:
+    build:
+      context: ./services/tracking-service
+      dockerfile: Dockerfile
+    container_name: tracking-service
+    environment:
+      DB_HOST: postgres-tracking
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres123
+      DB_NAME: trackingdb
+      JWT_SECRET: logistics-super-secret-jwt-key-2024
+      RABBITMQ_URL: amqp://admin:admin123@rabbitmq:5672/
+      PORT: 8003
+    depends_on:
+      postgres-tracking:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - logistics-network
+    restart: unless-stopped
+
+  notification-service:
+    build:
+      context: ./services/notification-service
+      dockerfile: Dockerfile
+    container_name: notification-service
+    environment:
+      DB_HOST: postgres-notification
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres123
+      DB_NAME: notificationdb
+      JWT_SECRET: logistics-super-secret-jwt-key-2024
+      RABBITMQ_URL: amqp://admin:admin123@rabbitmq:5672/
+      PORT: 8004
+    depends_on:
+      postgres-notification:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - logistics-network
+    restart: unless-stopped
+
+  # ============================================================
+  # API GATEWAY
+  # ============================================================
+  api-gateway:
+    build:
+      context: ./services/api-gateway
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      USER_SERVICE_URL: http://user-service:8001
+      ORDER_SERVICE_URL: http://order-service:8002
+      TRACKING_SERVICE_URL: http://tracking-service:8003
+      NOTIFICATION_SERVICE_URL: http://notification-service:8004
+      JWT_SECRET: logistics-super-secret-jwt-key-2024
+      PORT: 8000
+    depends_on:
+      - user-service
+      - order-service
+      - tracking-service
+      - notification-service
+    networks:
+      - logistics-network
+    restart: unless-stopped
+
+  # ============================================================
+  # FRONTEND
+  # ============================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      - api-gateway
+    networks:
+      - logistics-network
+    restart: unless-stopped
+
+# ============================================================
+# VOLUMES
+# ============================================================
+volumes:
+  postgres-user-data:
+  postgres-order-data:
+  postgres-tracking-data:
+  postgres-notification-data:
+  rabbitmq-data:
+
+# ============================================================
+# NETWORKS
+# ============================================================
+networks:
+  logistics-network:
+    driver: bridge
